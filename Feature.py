@@ -17,6 +17,7 @@ import maxflow
 import SkyDetection
 import datetime
 from scipy import io
+from CNN.ResnetBase import resnet50_no_softmax_v2, resnet101_no_softmax_v2, resnet152_no_softmax_v2
 import tqdm
 
 def version():
@@ -34,10 +35,20 @@ class DisplayType(Enum):
 class WeatherFeature:
     "Weather feature base class"
 
-    def __init__(self):
+    def __init__(self,
+                 cnn_model='resnet50',
+                 feature_list=['time', 'color', 'texture', 'intensity', 'cloud', 'lbp', 'haze', 'contrast', 'cnn']):
         # self.SrcImage = image
         # self.GrayImage = cv2.cvtColor(image, cv2.COLOR_BGR2GRAY)
+        self.feature_list = feature_list
         self.SkyDetector = SkyDetection.SkyDetection()
+        if cnn_model == 'resnet101':
+            self.CNN_Model = resnet101_no_softmax_v2()
+        elif cnn_model == 'resnet152':
+            self.CNN_Model = resnet152_no_softmax_v2()
+        else:
+            self.CNN_Model = resnet50_no_softmax_v2()
+
     def set_image(self, filename):
         self.filename = filename
         self.SrcImage = cv_imread(filename)
@@ -52,6 +63,7 @@ class WeatherFeature:
         self.time_feature = f_time(self.filename)
         self.dark_channel, self.haze_feature = f_haze(self.SrcImage)          # Haze feature
         self.contrast_feature = f_contrast(self.SrcImage)                     # Contrast feature
+        self.cnn_feature = f_CNN(self.SrcImage, self.CNN_Model)              # CNN feature
 
         # Local feature
         if self.MaskImage_sum == 0:
@@ -68,15 +80,36 @@ class WeatherFeature:
             self.cloud_feature = f_cloud_in_mask(self.SrcImage, self.MaskImage)                             # cloud feature
 
         # 总体特征，共801 D
-        self.feature = np.concatenate([self.time_feature,            # Time                      2 D
-                                      self.color_feature,           # RGB color histogram       64*3 = 192 D
-                                      self.texture_feature,         # Gabor wavelet             32 D
-                                      self.intensity_feature,       # Intensity histogram       64 D
-                                      self.cloud_feature,           # Cloud features            64*3 = 192 D
-                                      self.lbp_feature,             # Local binary pattern      64 D
-                                      self.haze_feature,            # Haze features             84 D
-                                      self.contrast_feature],       # Contrast features         171 D
-                                      axis=0)
+        # self.feature = np.concatenate([self.time_feature,            # Time                      2 D
+        #                               self.color_feature,           # RGB color histogram       64*3 = 192 D
+        #                               self.texture_feature,         # Gabor wavelet             32 D
+        #                               self.intensity_feature,       # Intensity histogram       64 D
+        #                               self.cloud_feature,           # Cloud features            64*3 = 192 D
+        #                               self.lbp_feature,             # Local binary pattern      64 D
+        #                               self.haze_feature,            # Haze features             84 D
+        #                               self.contrast_feature,       # Contrast features         171 D
+        #                               self.cnn_feature],            # cnn features              2048 D
+        #                               axis=0)
+        self.feature = []
+        if 'time' in self.feature_list:
+            self.feature.extend(self.time_feature)
+        if 'color' in self.feature_list:
+            self.feature.extend(self.color_feature)
+        if 'texture' in self.feature_list:
+            self.feature.extend(self.texture_feature)
+        if 'intensity' in self.feature_list:
+            self.feature.extend(self.intensity_feature)
+        if 'cloud' in self.feature_list:
+            self.feature.extend(self.cloud_feature)
+        if 'lbp' in self.feature_list:
+            self.feature.extend(self.lbp_feature)
+        if 'haze' in self.feature_list:
+            self.feature.extend(self.haze_feature)
+        if 'contrast' in self.feature_list:
+            self.feature.extend(self.contrast_feature)
+        if 'cnn' in self.feature_list:
+            self.feature.extend(self.cnn_feature)
+
     def imshow(self, *args):
         if args[0] == DisplayType.TYPE_ALL:
             args = [DisplayType.TYPE_SRC,
@@ -308,6 +341,13 @@ def f_time(filepath):
         d_number = d_number / 365
     s_number = s_number / (24*3600)
     return [d_number, s_number]
+
+def f_CNN(image, model):
+    expand_image = np.expand_dims(image, axis=0)
+    predict_results = model.predict(expand_image)
+    output_results = np.squeeze(predict_results, axis=0)
+    return output_results
+
 
 ## 功能函数
 def is_leap(year):
@@ -548,11 +588,25 @@ def get_filename_label(txtfilename, type='txt'):
             datalist = json.load(doc)['train_data']
     return datalist
 
+# ================ 测试函数 =================
+def f_cnn_test():
+    im = cv_imread(r"E:\Project\CV\WeatherPred\Data\ver0.0\0_sunny\34020000000270000055_20161123135350025_2501_.png")
+    # model = resnet50_no_softmax_v2()
+    # model = resnet101_no_softmax_v2()
+    model = resnet152_no_softmax_v2()
+    model.summary()
+    cnnfeatures = f_CNN(im, model)
+    # outputfeatures =
+    print(cnnfeatures)
+    print(np.array(cnnfeatures).shape)
+
 if __name__ == '__main__':
-    # # 功能测试
-    solver = WeatherFeature()
+    # # # 功能测试
+    # feature_list = ['time', 'color', 'texture', 'intensity', 'cloud', 'lbp', 'haze', 'contrast', 'cnn']
+    feature_list = ['time', 'color', 'texture', 'intensity', 'cloud', 'lbp', 'haze', 'contrast']
+    solver = WeatherFeature(feature_list=feature_list)
     # datalist = get_filename_label("D:/DataSet/WeatherClasifer_Chosen/Data/train.txt")
-    datalist = get_filename_label(r"E:\DataSet\WeatherClasifer_Chosen\ver0.0\DataInfo.json", type='json')
+    datalist = get_filename_label(r"E:\DataSet\WeatherClasifer_Chosen\ver0.0\DataInfo.json", type='json')[:100]
     training_data = []
     pbar = tqdm.tqdm(total=len(datalist))
     for elem in datalist:
@@ -561,14 +615,17 @@ if __name__ == '__main__':
         solver.getFeatures()
         training_data.append(np.concatenate([solver.feature, [int(elem[1])]], axis=0))
     pbar.close()
-    # # print(training_data)
-    # # print(len(training_data[0]))
-    #
-    # io.savemat("D:/DataSet/WeatherClasifer_Chosen/training_data.mat", {'array': training_data})
-    # print("特征提取完成！")
-    # training_data = io.loadmat("D:/DataSet/WeatherClasifer_Chosen/training_data.mat")
-    # print(training_data["array"])
-    # print(len(training_data["array"][0]))
+    print(training_data[0])
+    print(training_data[0].shape)
+    print(training_data[1])
+    print(training_data[1].shape)
+
+
+    io.savemat(r"E:\Project\CV\WeatherPred\Results\HandCrafted\training_data_all.mat", {'array': training_data})
+    print("特征提取完成！")
+    training_data = io.loadmat(r"E:\Project\CV\WeatherPred\Results\HandCrafted\training_data_all.mat")
+    print(training_data["array"])
+    print(len(training_data["array"][0]))
 
     # filepath = "E:/DataSet/SkyDetection/MaskImage/processed/34020000000270000055_20161028133111581_2501_小雨_多云.png"
     # solver.set_image(filepath)
